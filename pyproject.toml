@@ -1,0 +1,15 @@
+[project]
+name = "tts"
+version = "0.1.0"
+description = "Local TTS CLI — Qwen3-TTS on Apple Silicon via MLX"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "mlx-audio",
+]
+
+[project.scripts]
+tts-speak = "tts_cli:main"
+
+[tool.uv.sources]
+mlx-audio = { git = "https://github.com/Blaizzy/mlx-audio.git" }
