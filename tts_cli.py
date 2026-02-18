@@ -5,8 +5,10 @@ tts-speak: Local TTS CLI powered by Qwen3-TTS + MLX.
 Usage:
     tts-speak "Hello world"
     tts-speak "안녕하세요" --lang ko
-    tts-speak --voice "A deep male narrator" "Once upon a time..."
-    echo "Build complete" | tts-speak --stdin --play
+    echo "Build complete" | tts-speak --play
+    cat article.txt | tts-speak --lang ko --play
+    echo '{"text":"Done"}' | tts-speak --play
+    tts-speak -f notes.md --lang ko
     tts-speak "Done!" --play --no-save
 """
 
@@ -44,7 +46,7 @@ def parse_args(argv=None):
     )
     p.add_argument("text", nargs="?", default=None, help="Text to speak")
     p.add_argument(
-        "--stdin", action="store_true", help="Read text from stdin (for hooks/pipes)"
+        "-f", "--file", type=Path, help="Read text from file (.txt, .md, .json)"
     )
     p.add_argument(
         "--lang", default="en", help="Language: en, ko, ja, zh (default: en)"
@@ -65,27 +67,81 @@ def parse_args(argv=None):
     p.add_argument("--output", type=Path, default=None, help="Output directory")
     p.add_argument("--prefix", default="tts", help="Output filename prefix")
     p.add_argument(
-        "--json-input", action="store_true", help="Parse stdin as JSON (hook mode)"
+        "--json-key",
+        default=None,
+        help="JSON key to extract text from (default: tries 'message', 'text', 'content')",
     )
     p.add_argument("--max-tokens", type=int, default=2048, help="Max generation tokens")
     p.add_argument("--verbose", action="store_true", help="Show generation details")
     return p.parse_args(argv)
 
 
+def _stdin_is_pipe():
+    """Check if stdin has piped data (not a terminal)."""
+    return not sys.stdin.isatty()
+
+
+def _extract_json_text(raw, key=None):
+    """Try to extract text from JSON. Returns None if not JSON."""
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    if key:
+        return data.get(key, "")
+
+    # Try common keys in priority order
+    for k in ("message", "text", "content", "body", "description"):
+        if k in data and isinstance(data[k], str):
+            return data[k]
+
+    return None
+
+
 def resolve_text(args):
-    """Get text from args, stdin, or JSON hook input."""
-    if args.json_input:
-        data = json.load(sys.stdin)
-        return data.get("message") or data.get("text", "")
+    """Get text from argument, file, or stdin. Auto-detects JSON in all modes."""
 
-    if args.stdin:
-        return sys.stdin.read().strip()
+    raw = None
 
-    if args.text:
-        return args.text
+    # Priority 1: explicit file
+    if args.file:
+        p = args.file.expanduser()
+        if not p.exists():
+            print(f"Error: file not found: {p}", file=sys.stderr)
+            sys.exit(1)
+        raw = p.read_text(encoding="utf-8").strip()
 
-    print("Error: provide text as argument, --stdin, or --json-input", file=sys.stderr)
-    sys.exit(1)
+    # Priority 2: positional argument
+    elif args.text:
+        raw = args.text
+
+    # Priority 3: stdin (auto-detect pipe, no flag needed)
+    elif _stdin_is_pipe():
+        raw = sys.stdin.read().strip()
+
+    else:
+        print(
+            "Error: provide text as argument, -f <file>, or pipe via stdin",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if not raw:
+        print("Error: empty input", file=sys.stderr)
+        sys.exit(1)
+
+    # Auto-detect JSON in any input mode
+    json_text = _extract_json_text(raw, key=args.json_key)
+    if json_text is not None:
+        if args.verbose:
+            print("Parsed JSON, extracted text", file=sys.stderr)
+        return json_text
+
+    return raw
 
 
 def generate(args, text):
